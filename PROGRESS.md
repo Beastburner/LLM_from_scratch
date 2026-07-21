@@ -81,6 +81,32 @@ A language model does one thing: **predict the next token.** Generation = repeat
 
 ---
 
-## Next session: Rung 3
+## Session 2 — Rung 3: More context via embeddings (MLP model)
 
-Teach the bigram neural net to use **more than one character of context**, using learned embeddings rather than a bigger counting table — the direct fix for the `27ⁿ` explosion discovered in Rung 1, and the next real step toward attention and GPT.
+**Working file:** `ml.py` (new file, separate from `bigram.py`)
+
+**Concept, in plain terms:** instead of a bigger counting table (impossible past 1 character, per Rung 1's `27ⁿ` explosion), give every letter a small learned "fingerprint" — just a couple of numbers — and let the model look at the fingerprints of the last few letters *together* to guess what comes next. Similar-behaving letters can end up with similar fingerprints, so the model can generalize to combinations it's never exactly seen, instead of needing a memorized entry for every possible case.
+
+**Pipeline built:**
+1. **Wider training window:** instead of 1-letter-in/1-letter-out, built a sliding window of the last **3** characters → next character (`block_size = 3`). Same 228,146 total examples as before, each now carrying 3 letters of history. `X.shape = (228146, 3)`, `Y.shape = (228146,)`.
+2. **Embedding table (the "fingerprint book"):** `C = torch.randn((27, 2), requires_grad=True)` — 27 rows (one per token), 2 learnable numbers per row. `emb = C[X]` looks up every letter's fingerprint in one shot → shape `(228146, 3, 2)`.
+3. **Flatten:** `emb.view(-1, 6)` — squishes the 3 separate 2-number fingerprints into one 6-number strip per example, so the hidden layer can consider all 3 letters together.
+4. **Hidden layer (first real "deep" step):** `h = torch.tanh(emb_flat @ w1 + b1)`, with `w1` shape `(6, 100)` — 100 internal features the model invents for itself. `tanh` is the nonlinearity that makes stacking layers actually meaningful (without it, multiple linear layers collapse into being mathematically equivalent to just one).
+5. **Output layer:** `logits = h @ w2 + b2`, mapping the 100 hidden features down to 27 raw next-letter scores.
+6. **Same softmax + negative-log-likelihood loss as Rung 2.**
+7. **Training loop:** identical gradient descent mechanism as before, but now 5 sets of parameters (`C`, `w1`, `b1`, `w2`, `b2`) updated together each round via a `parameters = [...]` list.
+
+**Bugs hit and fixed:**
+- **Exploding starting loss (`14.5` instead of ~`3.3`):** caused by `torch.randn(...)` giving the output layer (`w2`, `b2`) starting values that were too large, making the model wildly (and wrongly) overconfident before any training happened. Fixed by shrinking `w2`'s initial values (`* 0.01`) and zeroing `b2` entirely — biases don't need randomness to break symmetry the way weights do, so zero is a safe, clean start.
+- **`TypeError: unsupported operand type(s) for *: 'int' and 'NoneType'`:** `p.grad` was `None` because `w2`/`b2` were built as `torch.randn(..., requires_grad=True) * 0.01` — the multiplication *after* `requires_grad=True` creates a new "non-leaf" tensor, and PyTorch only auto-populates `.grad` for original "leaf" tensors. Fixed by doing the shrink-down math first on a plain tensor, then calling `.requires_grad_()` as a separate final step: `(torch.randn((100,27)) * 0.01).requires_grad_()`.
+- **Parentheses bug:** `torch.randn((100,27) * 0.01, ...)` — the `* 0.01` accidentally landed inside the shape tuple instead of applying to the tensor.
+- **Loss exploding to `nan` mid-training:** the learning rate (`-10`, which worked fine for Rung 2's single-layer model) was far too aggressive for this deeper model, causing weights to overshoot and spiral out of control. Fixed by dropping the learning rate to `-0.1`.
+- **Inconsistent-looking generated output between runs:** no random seed was set anywhere in this file, so every run starts from different random weights — caused some justified suspicion of a bug (echoing the earlier "vanished training loop" incident), but adding `print(loss.item())` confirmed training reliably converges to a similar loss (~2.44–2.47) run to run regardless.
+
+**Result:** converged loss ~`2.44`–`2.47` — as good as or slightly *better* than Rung 2's bigram model (~`2.46`), despite using a fixed, small context window instead of an ever-growing counting table. Concrete proof that more context helps, achieved without hitting the curse of dimensionality.
+
+---
+
+## Next session: Rung 4
+
+Self-attention — the core idea that makes transformers (and GPT) work.
